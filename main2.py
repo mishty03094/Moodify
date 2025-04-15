@@ -25,10 +25,10 @@ MOOD_PLAYLISTS = {
 
 # Spotify API credentials
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-    client_id="6361952255fd417cb63c5eb5fd6c297d",
-    client_secret="b14bfb0ff973480baf2974aa513dbda0",
-    redirect_uri="http://localhost:8888/callback",
-    scope="user-modify-playback-state,user-read-playback-state"
+    client_id="",
+    client_secret="",
+    redirect_uri="",
+    scope=""
 ))
 
 def play_playlist(emotion):
