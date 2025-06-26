@@ -1,34 +1,31 @@
 import os
 import cv2
+import time
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
-import pickle  # Import pickle for saving the model
-from sklearn.model_selection import train_test_split
-import numpy as np
-import matplotlib.pyplot as plt
-
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
+# --- Spotify Setup ---
 MOOD_PLAYLISTS = {
-    "angry": "https://open.spotify.com/playlist/37i9dQZF1EIfX5bt1426JC",
-    "happy": "https://open.spotify.com/playlist/1nAFuLv3VOaQ85D7BlVJj5",
-    "sad": "https://open.spotify.com/playlist/37i9dQZF1DXdFesNN9TzXT",
-    "neutral": "https://open.spotify.com/playlist/37i9dQZF1EIdzRg9sDFEY3",
-    "surprise": "https://open.spotify.com/playlist/5qX8fjRLUukyxNrBSyDSQU",
-    "fear": "https://open.spotify.com/playlist/6CZjc29DnoDGFyO7Z1pBma",
-    "disgust": "https://open.spotify.com/playlist/09u0M1Q7YaqUUOG4GwX7nD",
+    "angry": "spotify:playlist:37i9dQZF1EIfX5bt1426JC",
+    "happy": "spotify:playlist:1nAFuLv3VOaQ85D7BlVJj5",
+    "sad": "spotify:playlist:37i9dQZF1DXdFesNN9TzXT",
+    "neutral": "spotify:playlist:37i9dQZF1EIdzRg9sDFEY3",
+    "surprise": "spotify:playlist:5qX8fjRLUukyxNrBSyDSQU",
+    "fear": "spotify:playlist:6CZjc29DnoDGFyO7Z1pBma",
+    "disgust": "spotify:playlist:09u0M1Q7YaqUUOG4GwX7nD",
 }
 
-# Spotify API credentials
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-    client_id="",
-    client_secret="",
-    redirect_uri="",
-    scope=""
+    client_id="6361952255fd417cb63c5eb5fd6c297dq",
+    client_secret="fbf5228eff494a1fab323a7777215b59",
+    redirect_uri="http://localhost:8888/callback",
+    scope="user-read-playback-state user-modify-playback-state user-read-currently-playing"
 ))
 
 def play_playlist(emotion):
@@ -42,13 +39,12 @@ def play_playlist(emotion):
         print("No active device found to play music.")
         return
 
-    device_id = devices['devices'][0]['id']  # Use the first active device
+    device_id = devices['devices'][0]['id']
     sp.start_playback(device_id=device_id, context_uri=playlist_uri)
     print(f"Playing {emotion} playlist on Spotify.")
 
-# Define file path for the saved model
+# --- Dataset ---
 MODEL_PATH = 'emotion_model.pth'
-
 
 class FERDataset(Dataset):
     def __init__(self, data_dir, transform=None):
@@ -56,14 +52,10 @@ class FERDataset(Dataset):
         self.transform = transform
         self.images = []
         self.labels = []
-
-        # Map emotions to indices
         self.emotion_map = {
             'angry': 0, 'disgust': 1, 'fear': 2,
             'happy': 3, 'sad': 4, 'surprise': 5, 'neutral': 6
         }
-
-        # Load images and labels
         for emotion, idx in self.emotion_map.items():
             emotion_dir = os.path.join(data_dir, emotion)
             for file in os.listdir(emotion_dir):
@@ -76,178 +68,162 @@ class FERDataset(Dataset):
     def __getitem__(self, idx):
         img_path = self.images[idx]
         label = self.labels[idx]
-
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         img = cv2.resize(img, (48, 48))
-
         if self.transform:
             img = self.transform(img)
-
         return img, label
 
-# Define transformations
-class CNN_Model(nn.Module):
+# --- CNN Model ---
+class CNN(nn.Module):
     def __init__(self):
-        super(CNN_Model, self).__init__()
-        # Convolutional layers
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        super(CNN, self).__init__()
+        self.model = nn.Sequential(
+            nn.Conv2d(1, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.25),
 
-        # Fully connected layers
-        self.fc1 = nn.Linear(256 * 6 * 6, 512)
-        self.fc2 = nn.Linear(512, 7)  # 7 classes for FER2013
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.25),
 
-        # Activation and pooling layers
-        self.pool = nn.MaxPool2d(2, 2)
-        self.relu = nn.ReLU()
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.25),
+
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, 7)
+        )
 
     def forward(self, x):
-        # Convolutional layers with ReLU activation and Max pooling
-        x = self.relu(self.conv1(x))
-        x = self.pool(x)
-
-        x = self.relu(self.conv2(x))
-        x = self.pool(x)
-
-        x = self.relu(self.conv3(x))
-        x = self.pool(x)
-
-        # Flatten the tensor and pass it through the fully connected layers
-        x = x.view(-1, 256 * 6 * 6)
-        x = self.relu(self.fc1(x))
-        x = self.fc2(x)
-
+        x = self.model(x)
+        x = self.fc(x)
         return x
 
+# --- Transform ---
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5,), (0.5,))
 ])
 
-# Specify the paths for training and validation sets
-train_data = FERDataset(data_dir="archive (16)/train", transform=transform)
-val_data = FERDataset(data_dir="archive (16)/test", transform=transform)
+# --- Load Data ---
+train_data = FERDataset(data_dir="archive (20)/train", transform=transform)
+val_data = FERDataset(data_dir="archive (20)/test", transform=transform)
 
 train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
 val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
 
-# Initialize the model, loss function, and optimizer
-model = CNN_Model()
+# --- Train or Load Model ---
+model = CNN()
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# Check if the model file exists and load it
 if os.path.exists(MODEL_PATH):
     model.load_state_dict(torch.load(MODEL_PATH))
     model.eval()
     print("Loaded pre-trained model.")
 else:
-    # Train the model if it doesn't exist
-    num_epochs = 10
-    for epoch in range(num_epochs):
+    print("Training model...")
+    for epoch in range(10):
         model.train()
         running_loss = 0.0
-        correct = 0
-        total = 0
+        correct, total = 0, 0
         for images, labels in train_loader:
-            # Forward pass
             outputs = model(images)
             loss = criterion(outputs, labels)
-
-            # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
+            _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-        print(
-            f"Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}, Accuracy: {100 * correct / total:.2f}%")
-
-    # Save the model after training
+        print(f"Epoch {epoch+1}/10 - Loss: {running_loss:.4f}, Accuracy: {100*correct/total:.2f}%")
     torch.save(model.state_dict(), MODEL_PATH)
-    print("Model trained and saved.")
 
-# Evaluate the model on the validation set
+# --- Evaluate ---
 model.eval()
-correct = 0
-total = 0
+correct, total = 0, 0
 with torch.no_grad():
     for images, labels in val_loader:
         outputs = model(images)
-        _, predicted = torch.max(outputs.data, 1)
+        _, predicted = torch.max(outputs, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
 
 print(f'Validation Accuracy: {100 * correct / total:.2f}%')
 
-
-def predict_image(image_path, model):
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    img = cv2.resize(img, (48, 48))
-    img = transforms.ToTensor()(img).unsqueeze(0)
-
-    with torch.no_grad():
-        output = model(img)
-        _, predicted = torch.max(output, 1)
-
-    emotion = list(train_data.emotion_map.keys())[predicted.item()]
-    return emotion
-
-cap = cv2.VideoCapture(0)
-face_cascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-print("Press 'q' to close.")
-
-# Update the predict_image function to process image arrays
+# --- Predict Image from Webcam ---
 def predict_image_array(face_array, model):
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
     ])
     face_resized = cv2.resize(face_array, (48, 48))
-    face_tensor = transform(face_resized).unsqueeze(0)  # Add batch dimension
-
+    face_tensor = transform(face_resized).unsqueeze(0)
     with torch.no_grad():
         output = model(face_tensor)
         _, predicted = torch.max(output, 1)
-
     emotion = list(train_data.emotion_map.keys())[predicted.item()]
     return emotion
 
-# Flag to check if a playlist is already playing
+# --- Webcam Emotion Detection ---
+cap = cv2.VideoCapture(0)
+face_cascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+print("Press 'q' to quit or wait 20 seconds...")
+
+start_time = time.time()
+min_duration = 20
 playlist_playing = False
 
 while True:
     ret, frame = cap.read()
     if not ret:
-        print("Failed to grab frame. Exiting.")
+        print("Failed to grab frame.")
         break
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
 
     for (x, y, w, h) in faces:
-        # Detect emotion
         face_array = gray[y:y + h, x:x + w]
         emotion = predict_image_array(face_array, model)
 
-        # Play music based on detected emotion only if a playlist is not already playing
         if not playlist_playing:
             play_playlist(emotion)
-            playlist_playing = True  # Set flag to prevent further playlist changes
+            playlist_playing = True
 
-        # Display the emotion on the video feed
-        cv2.putText(frame, emotion, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 182, 193), 2)
+        cv2.putText(frame, emotion, (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 182, 193), 2)
 
-    # Show the frame
     cv2.imshow("Live Emotion Recognition", frame)
 
-    # Exit on pressing 'q' or after one playlist starts playing
-    if cv2.waitKey(1) & 0xFF == ord('q') or playlist_playing:
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+    elif time.time() - start_time >= min_duration:
         break
 
 cap.release()
