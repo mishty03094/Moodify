@@ -20,12 +20,13 @@ MOOD_PLAYLISTS = {
     "fear": "spotify:playlist:6CZjc29DnoDGFyO7Z1pBma",
     "disgust": "spotify:playlist:09u0M1Q7YaqUUOG4GwX7nD",
 }
+#fill on your own
 
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-    client_id="6361952255fd417cb63c5eb5fd6c297dq",
-    client_secret="fbf5228eff494a1fab323a7777215b59",
-    redirect_uri="http://localhost:8888/callback",
-    scope="user-read-playback-state user-modify-playback-state user-read-currently-playing"
+    client_id="",
+    client_secret="",
+    redirect_uri="",
+    scope=""
 ))
 
 def play_playlist(emotion):
